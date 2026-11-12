@@ -1,10 +1,3 @@
-# Copyright 2026 Space Apps Challenge Team
-# Licensed under the Apache License, Version 2.0
-"""
-STREAMLIT FRONTEND ENTRYPOINT: For 1-click 24/7 deployment on Streamlit Community Cloud.
-Reads strictly from LocalFireCacheService (demo_fixtures/); never calls NASA directly.
-"""
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -62,7 +55,7 @@ selected_date = st.sidebar.date_input(
 )
 window_days = st.sidebar.slider("Map Aggregation Window (Days)", 1, 30, 7)
 palette = PALETTES[st.sidebar.selectbox("Fire Intensity Color Ramp", list(PALETTES.keys()), index=0)]
-mapbox_style = "carto-darkmatter" if st.sidebar.radio("Map Theme", ["Dark Basemap", "Light Basemap"]) == "Dark Basemap" else "carto-positron"
+map_style = "carto-darkmatter" if st.sidebar.radio("Map Theme", ["Dark Basemap", "Light Basemap"]) == "Dark Basemap" else "carto-positron"
 
 st.title(f"Active Fire Continuity & Burn Calendar — {selected_country.replace('_', ' ')}")
 st.caption("Harmonised Multi-Decade NASA FIRMS MODIS & VIIRS (S-NPP, NOAA-20, NOAA-21) Fire Monitoring")
@@ -107,9 +100,12 @@ with col_map:
         if len(agg) > 8000:
             agg = agg.nlargest(8000, "activity")
         clat, clon, czoom = COUNTRY_CENTERS.get(selected_country, (22.5, 79.0, 3.8))
-        fig_map = px.scatter_mapbox(
+        map_fn = px.scatter_map if hasattr(px, "scatter_map") else px.scatter_mapbox
+        style_kw = {"map_style": map_style} if hasattr(px, "scatter_map") else {"mapbox_style": map_style}
+        fig_map = map_fn(
             agg, lat="grid_lat", lon="grid_lon", color="activity", size="activity", size_max=14,
-            color_continuous_scale=palette, center={"lat": clat, "lon": clon}, zoom=czoom, height=460, mapbox_style=mapbox_style
+            hover_data={"grid_lat": True, "grid_lon": True, "activity": True, "total_frp": ":.1f"},
+            color_continuous_scale=palette, center={"lat": clat, "lon": clon}, zoom=czoom, height=460, **style_kw
         )
         fig_map.update_layout(margin=dict(l=0, r=0, t=5, b=0))
         st.plotly_chart(fig_map, use_container_width=True)
