@@ -1,0 +1,68 @@
+{
+  "region": "South Asia",
+  "countries": [
+    "All South Asia",
+    "Afghanistan",
+    "Bangladesh",
+    "Bhutan",
+    "India",
+    "Maldives",
+    "Nepal",
+    "Pakistan",
+    "Sri_Lanka"
+  ],
+  "cell_size_km": 5.5,
+  "confidence_min": 50,
+  "r_raw": 0.8244,
+  "r_harmonised": 0.8503,
+  "overlap_days": 5355,
+  "by_country": {
+    "All South Asia": {
+      "r_raw": 0.8244,
+      "r_harmonised": 0.8503,
+      "overlap_days": 5355
+    },
+    "Afghanistan": {
+      "r_raw": 0.6607,
+      "r_harmonised": 0.3764,
+      "overlap_days": 799
+    },
+    "Bangladesh": {
+      "r_raw": 0.7071,
+      "r_harmonised": 0.7551,
+      "overlap_days": 1643
+    },
+    "Bhutan": {
+      "r_raw": 0.7812,
+      "r_harmonised": 0.6937,
+      "overlap_days": 737
+    },
+    "India": {
+      "r_raw": 0.8121,
+      "r_harmonised": 0.8375,
+      "overlap_days": 5264
+    },
+    "Maldives": {
+      "r_raw": -0.1273,
+      "r_harmonised": NaN,
+      "overlap_days": 14
+    },
+    "Nepal": {
+      "r_raw": 0.8936,
+      "r_harmonised": 0.9076,
+      "overlap_days": 2430
+    },
+    "Pakistan": {
+      "r_raw": 0.6405,
+      "r_harmonised": 0.652,
+      "overlap_days": 4786
+    },
+    "Sri_Lanka": {
+      "r_raw": 0.3982,
+      "r_harmonised": 0.3874,
+      "overlap_days": 1666
+    }
+  },
+  "date_min": "2000-11-01",
+  "date_max": "2026-11-12"
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FIRMS South Asia Harmonised Burn Calendar</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Active Fire Continuity &amp; Burn Calendar — South Asia</h1>
+    <div class="subtitle">Multi-Decade NASA FIRMS MODIS &amp; VIIRS (S-NPP, NOAA-20, NOAA-21) • 5.5 km Harmonised Grid</div>
+  </header>
+
+  <div class="controls">
+    <label>Region:
+      <select id="countrySelect">
+        <option value="All South Asia">All South Asia</option>
+        <option value="India">India</option>
+        <option value="Pakistan">Pakistan</option>
+        <option value="Nepal">Nepal</option>
+        <option value="Bangladesh">Bangladesh</option>
+        <option value="Sri_Lanka">Sri Lanka</option>
+        <option value="Afghanistan">Afghanistan</option>
+        <option value="Bhutan">Bhutan</option>
+        <option value="Maldives">Maldives</option>
+      </select>
+    </label>
+    <label>Date: <input type="date" id="dateInput" value="2026-11-12" /></label>
+    <button id="btnHarm" class="active" onclick="setMode('harmonised')">Harmonised (5.5 km Cells)</button>
+    <button id="btnRaw" onclick="setMode('raw')">Raw Detections</button>
+  </div>
+
+  <div class="metrics" id="metricsRow"></div>
+  <div class="anomaly-box" id="anomalyBox">Loading cached South Asia fire baseline...</div>
+
+  <div class="grid-2">
+    <div class="panel"><h3>Year-by-Day Burning Activity Calendar (2000–2026)</h3><div id="calendarChart"></div></div>
+    <div class="panel"><h3>Multi-Decade Continuity Series</h3><div id="seriesChart"></div></div>
+  </div>
+
+  <footer>
+    <strong>Methods &amp; Continuity:</strong> Detections are binned onto a 5.5 km grid (confidence &ge; 50) with same-day cell duplicates collapsed to 1 event/day, improving MODIS–VIIRS correlation from <strong>r = 0.8244</strong> to <strong>r = 0.8503</strong> across 5,355 overlap days. Essential for uninterrupted monitoring across the 2 November 2026 Suomi-NPP retirement transition. Data courtesy of NASA FIRMS. Licensed under Apache-2.0.
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
