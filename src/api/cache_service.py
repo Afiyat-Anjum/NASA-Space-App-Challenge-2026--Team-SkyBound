@@ -38,12 +38,75 @@ class LocalFireCacheService:
             filters.append(("country", "==", country))
         return pd.read_parquet(f"{self.data_dir}/cell_daily.parquet", filters=filters)
 
-    def check_seasonal_anomaly(
-        self, country: str, target_date: str, mode: str = "harmonised", window_days: int = 7
+    def _aoi_bounds(self, lat: float, lon: float, radius_km: float):
+        lat_deg = radius_km / 111.32
+        lon_deg = radius_km / (111.32 * max(float(np.cos(np.radians(lat))), 0.15))
+        return lat - lat_deg, lat + lat_deg, lon - lon_deg, lon + lon_deg
+
+    def get_aoi_cells(
+        self, lat: float, lon: float, radius_km: float, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+    ) -> pd.DataFrame:
+        lat_min, lat_max, lon_min, lon_max = self._aoi_bounds(lat, lon, radius_km)
+        filters = [
+            ("date", ">=", start_ts),
+            ("date", "<=", end_ts),
+            ("grid_lat", ">=", float(lat_min)),
+            ("grid_lat", "<=", float(lat_max)),
+            ("grid_lon", ">=", float(lon_min)),
+            ("grid_lon", "<=", float(lon_max)),
+        ]
+        df = pd.read_parquet(f"{self.data_dir}/cell_daily.parquet", filters=filters)
+        if df.empty:
+            return df
+        # Refine to circular radius in km
+        dlat_km = (df["grid_lat"].astype(float) - lat) * 111.32
+        dlon_km = (df["grid_lon"].astype(float) - lon) * 111.32 * max(float(np.cos(np.radians(lat))), 0.15)
+        return df[np.hypot(dlat_km, dlon_km) <= radius_km].copy()
+
+    def get_aoi_daily_series(self, lat: float, lon: float, radius_km: float) -> pd.DataFrame:
+        lat_min, lat_max, lon_min, lon_max = self._aoi_bounds(lat, lon, radius_km)
+        filters = [
+            ("grid_lat", ">=", float(lat_min)),
+            ("grid_lat", "<=", float(lat_max)),
+            ("grid_lon", ">=", float(lon_min)),
+            ("grid_lon", "<=", float(lon_max)),
+        ]
+        df = pd.read_parquet(f"{self.data_dir}/cell_daily.parquet", filters=filters)
+        min_d = pd.Timestamp("2012-01-01")
+        max_d = self.daily["date"].max()
+        full_dates = pd.date_range(min_d, max_d, freq="D")
+
+        if not df.empty:
+            dlat_km = (df["grid_lat"].astype(float) - lat) * 111.32
+            dlon_km = (df["grid_lon"].astype(float) - lon) * 111.32 * max(float(np.cos(np.radians(lat))), 0.15)
+            df = df[np.hypot(dlat_km, dlon_km) <= radius_km].copy()
+            df["date"] = pd.to_datetime(df["date"])
+            agg = (
+                df.groupby("date", as_index=False)
+                .agg(
+                    harmonised_count=("harmonised_hits", "sum"),
+                    raw_count=("raw_hits", "sum"),
+                    total_frp=("frp", "sum"),
+                )
+            )
+            out = pd.DataFrame({"date": full_dates}).merge(agg, on="date", how="left").fillna(0)
+        else:
+            out = pd.DataFrame(
+                {"date": full_dates, "harmonised_count": 0, "raw_count": 0, "total_frp": 0.0}
+            )
+
+        out["country"] = f"AOI ({lat:.2f}, {lon:.2f})"
+        out["year"] = out["date"].dt.year
+        out["doy"] = out["date"].dt.dayofyear.clip(upper=365)
+        out["harmonised_count"] = out["harmonised_count"].astype(int)
+        out["raw_count"] = out["raw_count"].astype(int)
+        return out
+
+    def compute_anomaly_from_series(
+        self, sub: pd.DataFrame, label: str, target_date: str, mode: str = "harmonised", window_days: int = 7
     ) -> dict:
-        sub = self.get_daily_series(country)
         if sub.empty:
-            return {"status": "UNKNOWN_COUNTRY", "country": country}
+            return {"status": "UNKNOWN_REGION", "country": label}
 
         val_col = "harmonised_count" if mode == "harmonised" else "raw_count"
         target_ts = pd.Timestamp(target_date)
@@ -60,24 +123,28 @@ class LocalFireCacheService:
             return {"status": "INSUFFICIENT_HISTORY", "current_value": current_val}
 
         pct_rank = float((hist_win[val_col] <= current_val).mean() * 100.0)
+        mean_val = float(hist_win[val_col].mean())
         med_val = float(hist_win[val_col].median())
         p90_val = float(np.percentile(hist_win[val_col], 90))
+        pct_vs_mean = ((current_val - mean_val) / mean_val * 100.0) if mean_val > 0 else (100.0 if current_val > 0 else 0.0)
 
-        if pct_rank >= 90:
+        if pct_rank >= 90 and current_val > 0:
             verdict = "UNUSUAL / EXTREME BURNING ACTIVITY"
-        elif pct_rank >= 75:
-            verdict = "ELEVATED / ABOVE SEASONAL NORMAL"
+        elif pct_rank >= 75 and current_val > 0:
+            verdict = "ELEVATED / ABOVE SEASONAL AVERAGE"
         else:
             verdict = "WITHIN NORMAL SEASONAL RANGE"
 
         return {
             "status": "OK",
-            "country": country,
+            "country": label,
             "date": str(target_ts.date()),
             "doy": int(target_doy),
             "mode": mode,
             "current_value": current_val,
             "percentile": round(pct_rank, 1),
+            "baseline_mean": round(mean_val, 1),
+            "pct_vs_mean": round(pct_vs_mean, 1),
             "baseline_median": round(med_val, 1),
             "baseline_p90": round(p90_val, 1),
             "baseline_window_days": int(len(hist_win)),
@@ -85,14 +152,26 @@ class LocalFireCacheService:
             "verdict": verdict,
         }
 
-    def predict_spread_risk(self, country: str, end_ts: pd.Timestamp) -> pd.DataFrame:
+    def check_seasonal_anomaly(
+        self, country: str, target_date: str, mode: str = "harmonised", window_days: int = 7
+    ) -> dict:
+        sub = self.get_daily_series(country)
+        return self.compute_anomaly_from_series(sub, country, target_date, mode, window_days)
+
+    def predict_spread_risk(
+        self, country: str, end_ts: pd.Timestamp, aoi: tuple | None = None
+    ) -> pd.DataFrame:
         """
         Empirical Next-7-Day Fire Spread Risk: combines active fire front proximity,
         FRP intensity, 48h progression heading, and multi-year seasonal burn susceptibility
         on adjacent 5.5 km grid cells using only cached Parquet history.
         """
         start_front = end_ts - pd.Timedelta(days=1)
-        active = self.get_map_cells(country, start_front, end_ts)
+        if aoi is not None:
+            active = self.get_aoi_cells(aoi[0], aoi[1], aoi[2], start_front, end_ts)
+        else:
+            active = self.get_map_cells(country, start_front, end_ts)
+
         if active.empty:
             return pd.DataFrame()
 
@@ -106,7 +185,6 @@ class LocalFireCacheService:
             .nlargest(250, "frp")
         )
 
-        # Estimate recent 48h progression vector (day t-1 -> day t)
         d_prev = active[active["date"] < end_ts]
         d_curr = active[active["date"] == end_ts]
         vec_lat, vec_lon = 0.0, 0.0
@@ -153,8 +231,17 @@ class LocalFireCacheService:
 
         cand_df = pd.DataFrame(list(candidates.values()))
 
-        # Load historical seasonal burn susceptibility (next 14 DOYs in prior years)
-        filters = [("country", "==", country)] if country != "All South Asia" else None
+        if aoi is not None:
+            lat_min, lat_max, lon_min, lon_max = self._aoi_bounds(aoi[0], aoi[1], aoi[2] + 15.0)
+            filters = [
+                ("grid_lat", ">=", float(lat_min)),
+                ("grid_lat", "<=", float(lat_max)),
+                ("grid_lon", ">=", float(lon_min)),
+                ("grid_lon", "<=", float(lon_max)),
+            ]
+        else:
+            filters = [("country", "==", country)] if country != "All South Asia" else None
+
         hist = pd.read_parquet(
             f"{self.data_dir}/cell_daily.parquet",
             columns=["grid_lat", "grid_lon", "date"],
