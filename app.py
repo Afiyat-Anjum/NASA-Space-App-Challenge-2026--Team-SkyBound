@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -26,6 +25,9 @@ PALETTES = {
     "Cividis (Colorblind-Safe)": "Cividis",
 }
 
+MONTH_TICKS = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
 
 @st.cache_resource
 def get_services():
@@ -42,21 +44,28 @@ def cached_cells(country: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp):
 svc, agent = get_services()
 metrics = svc.get_metrics()
 
-st.sidebar.header("Region, Date & Visual Style")
+# --- SIDEBAR: REGION, DATE RANGE & VISUAL ACCESSIBILITY ---
+st.sidebar.header("Search Region, Date Range & Style")
 selected_country = st.sidebar.selectbox(
     "Study Area (South Asia)", options=metrics["countries"], index=0, format_func=lambda x: x.replace("_", " ")
 )
 sub_daily = svc.get_daily_series(selected_country)
-selected_date = st.sidebar.date_input(
-    "Target Inspection Date",
-    value=sub_daily["date"].max().date(),
-    min_value=sub_daily["date"].min().date(),
-    max_value=sub_daily["date"].max().date(),
-)
-window_days = st.sidebar.slider("Map Aggregation Window (Days)", 1, 30, 7)
+min_d = sub_daily["date"].min().date()
+max_d = sub_daily["date"].max().date()
+default_start = max(min_d, (pd.Timestamp(max_d) - pd.Timedelta(days=6)).date())
+
+start_date = st.sidebar.date_input("Search Start Date", value=default_start, min_value=min_d, max_value=max_d)
+end_date = st.sidebar.date_input("Search End Date (Anomaly Target)", value=max_d, min_value=min_d, max_value=max_d)
+
+if start_date > end_date:
+    st.sidebar.warning("Start Date is after End Date; adjusting Start Date to match End Date.")
+    start_date = end_date
+
+span_days = (end_date - start_date).days + 1
 palette = PALETTES[st.sidebar.selectbox("Fire Intensity Color Ramp", list(PALETTES.keys()), index=0)]
 map_style = "carto-darkmatter" if st.sidebar.radio("Map Theme", ["Dark Basemap", "Light Basemap"]) == "Dark Basemap" else "carto-positron"
 
+# --- HEADER & SINGLE MASTER TOGGLE ---
 st.title(f"Active Fire Continuity & Burn Calendar — {selected_country.replace('_', ' ')}")
 st.caption("Harmonised Multi-Decade NASA FIRMS MODIS & VIIRS (S-NPP, NOAA-20, NOAA-21) Fire Monitoring")
 
@@ -69,16 +78,21 @@ is_harm = mode.startswith("Harmonised")
 val_col = "harmonised_count" if is_harm else "raw_count"
 cell_col = "harmonised_hits" if is_harm else "raw_hits"
 
+# --- VALIDATION CORRELATION & SEARCH SUMMARY ---
 c_metrics = metrics["by_country"].get(selected_country, metrics)
+range_mask = (sub_daily["date"].dt.date >= start_date) & (sub_daily["date"].dt.date <= end_date)
+range_total = int(sub_daily.loc[range_mask, val_col].sum())
+
 v1, v2, v3, v4 = st.columns(4)
 v1.metric("Raw MODIS vs. VIIRS (r)", f"{c_metrics['r_raw']:.4f}")
 v2.metric("Harmonised MODIS vs. VIIRS (r)", f"{c_metrics['r_harmonised']:.4f}", delta=f"{c_metrics['r_harmonised'] - c_metrics['r_raw']:+.4f}")
-v3.metric("Sensor Overlap Days", f"{c_metrics['overlap_days']:,}")
+v3.metric(f"Selected Range Total ({span_days}d)", f"{range_total:,}", help=f"{start_date} to {end_date}")
 v4.metric("Grid & Confidence Rule", f"{metrics['cell_size_km']} km | Conf ≥ {metrics['confidence_min']}")
 
+# --- SEASONAL ANOMALY CHECK ---
 st.subheader("Is this unusual for this place and this time of year?")
 briefing = agent.generate_situational_briefing(
-    country=selected_country, target_date=str(selected_date), mode="harmonised" if is_harm else "raw"
+    country=selected_country, target_date=str(end_date), mode="harmonised" if is_harm else "raw"
 )
 anom = briefing["anomaly_assessment"]
 if anom.get("status") == "OK":
@@ -90,11 +104,14 @@ if anom.get("status") == "OK":
         f"({anom['baseline_years']}, median = **{anom['baseline_median']:.0f}**, 90th pct = **{anom['baseline_p90']:.0f}**)."
     )
 
+# --- SPATIAL MAP & YEAR-BY-MONTH BURNING ACTIVITY CALENDAR ---
 col_map, col_cal = st.columns([1.05, 1.35])
+start_ts = pd.Timestamp(start_date)
+end_ts = pd.Timestamp(end_date)
+map_df = cached_cells(selected_country, start_ts, end_ts)
+
 with col_map:
-    st.subheader(f"Active Fire Grid Map ({window_days}-Day Window)")
-    target_ts = pd.Timestamp(selected_date)
-    map_df = cached_cells(selected_country, target_ts - pd.Timedelta(days=window_days - 1), target_ts)
+    st.subheader(f"Active Fire Grid Map ({start_date} to {end_date})")
     if not map_df.empty:
         agg = map_df.groupby(["cell_id", "grid_lat", "grid_lon"], as_index=False).agg(activity=(cell_col, "sum"), total_frp=("frp", "sum"))
         if len(agg) > 8000:
@@ -105,20 +122,51 @@ with col_map:
         fig_map = map_fn(
             agg, lat="grid_lat", lon="grid_lon", color="activity", size="activity", size_max=14,
             hover_data={"grid_lat": True, "grid_lon": True, "activity": True, "total_frp": ":.1f"},
-            color_continuous_scale=palette, center={"lat": clat, "lon": clon}, zoom=czoom, height=460, **style_kw
+            color_continuous_scale=palette, center={"lat": clat, "lon": clon}, zoom=czoom, height=460, **style_kw,
+            labels={"activity": "Harmonised Cell-Days" if is_harm else "Raw Hotspots"},
         )
         fig_map.update_layout(margin=dict(l=0, r=0, t=5, b=0))
         st.plotly_chart(fig_map, use_container_width=True)
     else:
-        st.info("No detections in this window.")
+        st.info(f"No spatial cell detections recorded between {start_date} and {end_date} (note: spatial map archive covers 2012–2026; full 2000–2026 series appears in the calendar and charts).")
 
 with col_cal:
-    st.subheader("Year-by-Day Burning Activity Calendar (2000–2026)")
+    st.subheader("Year-by-Month Burning Activity Calendar (2000–2026)")
     cal_pivot = sub_daily.pivot_table(index="year", columns="doy", values=val_col, aggfunc="sum", fill_value=0)
-    fig_cal = px.imshow(cal_pivot, aspect="auto", color_continuous_scale=palette, height=460)
+    fig_cal = px.imshow(
+        cal_pivot,
+        aspect="auto",
+        color_continuous_scale=palette,
+        height=460,
+        labels={"x": "Month of Year", "y": "Year", "color": "Cell-Days" if is_harm else "Raw Hotspots"},
+    )
+    fig_cal.update_xaxes(tickmode="array", tickvals=MONTH_TICKS, ticktext=MONTH_NAMES)
     fig_cal.update_layout(margin=dict(l=0, r=0, t=5, b=0))
     st.plotly_chart(fig_cal, use_container_width=True)
 
+# --- DOWNLOADABLE CSV OUTPUTS (SEARCH HOTSPOTS & ANALYTICS) ---
+dl1, dl2 = st.columns(2)
+with dl1:
+    export_spots = map_df.head(50000).copy()
+    if not export_spots.empty:
+        export_spots["date"] = pd.to_datetime(export_spots["date"]).dt.strftime("%Y-%m-%d")
+    st.download_button(
+        label=f"Download Search Hotspots CSV ({start_date} to {end_date})",
+        data=export_spots.to_csv(index=False).encode("utf-8"),
+        file_name=f"firms_{selected_country.lower()}_hotspots_{start_date}_to_{end_date}.csv",
+        mime="text/csv",
+        disabled=export_spots.empty,
+    )
+
+with dl2:
+    st.download_button(
+        label=f"Download 2000–2026 Daily Analytics CSV ({selected_country.replace('_', ' ')})",
+        data=sub_daily.to_csv(index=False).encode("utf-8"),
+        file_name=f"firms_{selected_country.lower()}_daily_analytics_2000_2026.csv",
+        mime="text/csv",
+    )
+
+# --- MULTI-DECADE CONTINUITY SERIES & OVERLAP SCATTER ---
 c_ts, c_sc = st.columns([1.4, 1.0])
 with c_ts:
     st.subheader("Multi-Decade Continuity Series (7-Day Rolling Mean)")
@@ -139,4 +187,9 @@ with c_sc:
     st.plotly_chart(fig_sc, use_container_width=True)
 
 with st.expander("Methods, Validation & Sensor Continuity Notes", expanded=True):
-    st.markdown(f"- {briefing['continuity_note']}\n- **Validation:** Pearson correlation improved from **r = {metrics['r_raw']:.4f}** to **r = {metrics['r_harmonised']:.4f}** across {metrics['overlap_days']:,} overlap days.\n- **Attribution:** NASA FIRMS MODIS Collection 6.1 & VIIRS (S-NPP, NOAA-20, NOAA-21). Apache-2.0.")
+    st.markdown(
+        f"- {briefing['continuity_note']}\n"
+        f"- **Validation:** Pearson correlation improved from **r = {metrics['r_raw']:.4f}** to **r = {metrics['r_harmonised']:.4f}** across {metrics['overlap_days']:,} overlap days.\n"
+        f"- **Exporting Visuals & Data:** Hover over any chart and click the camera icon to download high-resolution PNG visualizations, or use the CSV download buttons above for raw/harmonised search hotspots and multi-decade analytics.\n"
+        f"- **Attribution:** NASA FIRMS MODIS Collection 6.1 & VIIRS (S-NPP, NOAA-20, NOAA-21). Apache-2.0."
+    )
