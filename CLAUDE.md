@@ -4,7 +4,7 @@
 Read top to bottom and preserve strict separation of concerns:
 1. **Frontend (`web/` and `app.py`) NEVER calls NASA directly.** It communicates exclusively with `src/api/` or static `demo_fixtures/`.
 2. **API layer (`src/api/`) NEVER calls NASA during a demo.** It reads strictly from local `demo_fixtures/` (or pre-populated `cache/`).
-3. **Acquisition layer (`src/acquire/`) runs offline before the event** and caches raw NASA FIRMS CSVs in `cache/` (gitignored).
+3. **Acquisition layer (`src/acquire/`) 
 4. **Compute layer (`src/compute/`) is pure deterministic science — NO LLM calls or probabilistic generative models inside `src/compute/`.**
 5. **Agents (`src/agents/`) sit beside `src/api/` and reach data ONLY through typed tool schemas** defined in `src/agents/tools.py`.
 
